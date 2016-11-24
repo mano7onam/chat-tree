@@ -127,8 +127,8 @@ int create_new_message(int type, int id_destination) {
 
 void send_message(int id_destination, int id_message) {
     std::pair<void*, int> send_buf = MM[{id_destination, id_message}];
-    fprintf(stderr, "Send message: %d %d\n", id_destination, id_message);
-    fprintf(stderr, "Type: %d\n", ntohl(((uint32_t*)send_buf.first)[0]));
+    //fprintf(stderr, "Send message: %d %d\n", id_destination, id_message);
+    //fprintf(stderr, "Type: %d\n", ntohl(((uint32_t*)send_buf.first)[0]));
     ssize_t size = sendto(socket_fd, send_buf.first, (size_t)send_buf.second, 0,
                           (struct sockaddr *)&connections[id_destination], sizeof(struct sockaddr_in));
     if (size < 0) {
@@ -136,7 +136,6 @@ void send_message(int id_destination, int id_message) {
         return;
     }
     std::string str_addr = pack_address(connections[id_destination]);
-    //printf(stderr, "Addr: %s\n", str_addr.c_str());
 }
 
 void send_good_message(int id_destination, int id_taken_message) {
@@ -148,26 +147,29 @@ void send_good_message(int id_destination, int id_taken_message) {
     free(cur_buf);
 }
 
-void delete_delivered_message(int id_who, int id_delivered_message) {
-    auto key = std::make_pair(id_who, id_delivered_message);
+void erase_message_from_maps(std::pair<int, int> key) {
     free(MM[key].first);
     MM.erase(key);
     MT.erase(key);
     MST.erase(key);
 }
 
+void delete_delivered_message(int id_who, int id_delivered_message) {
+    auto key = std::make_pair(id_who, id_delivered_message);
+    erase_message_from_maps(key);
+}
+
 void check_and_resend(long long current_time) {
-    std::vector<std::pair<int, int>> outdates;
+    std::vector<std::pair<int, int>> outdates_messages;
     for (auto elem : MT) {
         long long diff = current_time - elem.second;
         if (diff > TIME_TO_KEEP) {
-            outdates.push_back(elem.first);
+            outdates_messages.push_back(elem.first);
         }
     }
 
-    for (auto key : outdates) {
-        MM.erase(key);
-        MT.erase(key);
+    for (auto key : outdates_messages) {
+        erase_message_from_maps(key);
     }
 
     for (auto elem : MM) {
@@ -181,14 +183,14 @@ void check_and_resend(long long current_time) {
     }
 
     for (auto it = received_messages.begin(); it != received_messages.end(); ++it) {
-        std::vector<int> outdates;
+        std::vector<int> outdates_received_kept;
         for (auto msg : it->second) {
             long long diff = current_time - msg.second;
             if (diff > TIME_KEEP_RECEIVED) {
-                outdates.push_back(msg.first);
+                outdates_received_kept.push_back(msg.first);
             }
         }
-        for (auto id : outdates) {
+        for (auto id : outdates_received_kept) {
             it->second.erase(id);
         }
     }
@@ -202,7 +204,7 @@ void on_signal_close(int sig) {
         create_new_message(LEFT, id_parent);
     }
 
-    fprintf(stderr, "Children size: %d\n", children.size());
+    fprintf(stderr, "Children size: %ld\n", children.size());
     int sz = (int)children.size();
     if (sz) {
         int new_parent;
@@ -258,7 +260,7 @@ bool parse_address(char* cstr_addr, struct sockaddr_in &addr) {
 
     char strip[1000];
     char strport[1000];
-    fprintf(stderr, "%d %d %d\n", pos, pos + 1, len - pos - 1);
+    fprintf(stderr, "%ld %ld %ld\n", pos, pos + 1, len - pos - 1);
     strncpy(strip, cstr_addr, pos);
     strip[pos] = '\0';
     strncpy(strport, cstr_addr + pos + 1, len - pos - 1);
@@ -481,6 +483,8 @@ int recv_message() {
             send_good_message(current_id, id_message);
         }
     }
+
+    return 1;
 }
 
 int main(int argc, char* argv[]) {

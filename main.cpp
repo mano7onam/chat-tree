@@ -28,7 +28,7 @@ const int CHILD = 5;
 const int BUFFER_SIZE = 1000000;
 const long long TIME_TO_KEEP = 5000000LL; // keep message 5 seconds
 const long long TIME_KEEP_RECEIVED = 5000000LL;
-const long long SENDING_INTERVAL = 1000000LL; // send messages not more than once every this instrval
+const long long SENDING_INTERVAL = 1000000LL; // send messages not more than once every this interval
 const int MESSAGE_MAX_SIZE = 100000;
 const int ADDRESS_MAX_SIZE = 1000;
 
@@ -97,27 +97,27 @@ int create_new_message(int type, int id_destination) {
     fprintf(stderr, "Create new: %d %d\n", type, id_destination);
 
     int size = 0;
-    void* buf = malloc(BUFFER_SIZE);
-    ((int*)buf)[0] = htonl((uint32_t)type);
-    ((int*)buf)[1] = htonl((uint32_t)id_new_message);
-    size += 2 * sizeof(int);
+    void * new_buf = malloc(BUFFER_SIZE);
+    ((int*)new_buf)[0] = htonl((uint32_t)type);
+    ((int*)new_buf)[1] = htonl((uint32_t)id_new_message);
+    size += 2 * sizeof(uint32_t);
 
     if (type == MSG) {
-        ((int*)buf)[2] = htonl((uint32_t)tosend_message.size());
+        ((int*)new_buf)[2] = htonl((uint32_t)tosend_message.size());
         size += sizeof(int);
-        memcpy((void*)((char*)buf + size), tosend_message.c_str(), tosend_message.size());
+        memcpy((void*)((char*)new_buf + size), tosend_message.c_str(), tosend_message.size());
         size += tosend_message.size();
     }
     else if (type == PARENT || type == CHILD || type == LEFT) {
-        ((int*)buf)[2] = htonl((uint32_t)tosend_address.size());
+        ((int*)new_buf)[2] = htonl((uint32_t)tosend_address.size());
         fprintf(stderr, "Tosend: %s\n", tosend_address.c_str());
         size += sizeof(int);
-        memcpy((void*)((char*)buf + size), tosend_address.c_str(), tosend_address.size());
+        memcpy((void*)((char*)new_buf + size), tosend_address.c_str(), tosend_address.size());
         size += tosend_address.size();
     }
 
     auto key = std::make_pair(id_destination, id_new_message);
-    MM[key] = {buf, size};
+    MM[key] = {new_buf, size};
     auto cur_time = std::chrono::high_resolution_clock::now().time_since_epoch();
     MT[key] = std::chrono::duration_cast<std::chrono::microseconds>(cur_time).count();
     MST[key] = MT[{id_destination, id_new_message}] - SENDING_INTERVAL - 1;
@@ -126,9 +126,10 @@ int create_new_message(int type, int id_destination) {
 }
 
 void send_message(int id_destination, int id_message) {
-    //fprintf(stderr, "Send message: %d %d\n", id_destination, id_message);
-    std::pair<void*, int> buf = MM[{id_destination, id_message}];
-    ssize_t size = sendto(socket_fd, buf.first, (size_t)buf.second, 0,
+    std::pair<void*, int> send_buf = MM[{id_destination, id_message}];
+    fprintf(stderr, "Send message: %d %d\n", id_destination, id_message);
+    fprintf(stderr, "Type: %d\n", ntohl(((uint32_t*)send_buf.first)[0]));
+    ssize_t size = sendto(socket_fd, send_buf.first, (size_t)send_buf.second, 0,
                           (struct sockaddr *)&connections[id_destination], sizeof(struct sockaddr_in));
     if (size < 0) {
         perror("Send");
@@ -140,8 +141,8 @@ void send_message(int id_destination, int id_message) {
 
 void send_good_message(int id_destination, int id_taken_message) {
     void* cur_buf = malloc(16);
-    ((int*)buf)[0] = htonl((uint32_t)GOODMSG);
-    ((int*)buf)[1] = htonl((uint32_t)id_taken_message);
+    ((int*)cur_buf)[0] = htonl((uint32_t)GOODMSG);
+    ((int*)cur_buf)[1] = htonl((uint32_t)id_taken_message);
     sendto(socket_fd, cur_buf, 2 * sizeof(int), 0,
            (struct sockaddr *)&connections[id_destination], sizeof(struct sockaddr_in));
     free(cur_buf);
@@ -247,7 +248,6 @@ struct sockaddr_in get_address(char *strip, char *strport) {
 }
 
 bool parse_address(char* cstr_addr, struct sockaddr_in &addr) {
-    fprintf(stderr, "Addr: %s\n", cstr_addr);
     std::string str_addr(cstr_addr);
     size_t pos = str_addr.find(':');
     size_t len = str_addr.size();
@@ -264,9 +264,7 @@ bool parse_address(char* cstr_addr, struct sockaddr_in &addr) {
     strncpy(strport, cstr_addr + pos + 1, len - pos - 1);
     strport[len - pos - 1] = '\0';
 
-    //fprintf(stderr, "Ip: %s, Port: %s\n", strip, strport);
     addr = get_address(strip, strport);
-    //fprintf(stderr, "Ip: %s, Port: %s\n", strip, strport);
     return true;
 }
 
@@ -286,9 +284,7 @@ void do_express_myself() {
     fprintf(stderr, "%s\n", str_addr.c_str());
 
     if (!flag_root) {
-        fprintf(stderr, "BBBBBBBBBBBBBBBBBBBBB\n");
         tosend_address = pack_address(my_addr);
-        fprintf(stderr, "BBB: %s\n", tosend_address.c_str());
         create_new_message(CHILD, id_parent);
     }
 }
@@ -297,7 +293,7 @@ void read_message_from_console() {
     char message[MESSAGE_MAX_SIZE];
     fgets(message, MESSAGE_MAX_SIZE, stdin);
     tosend_message = std::string(message);
-    fprintf(stderr, "Read message %s\n", message);
+    fprintf(stderr, "Input from console: %s\n", message);
 
     if (!flag_root) {
         create_new_message(MSG, id_parent);
@@ -315,13 +311,12 @@ void handle_child_message(struct sockaddr_in addr_from) {
     struct sockaddr_in addr;
     if (str_addr[0] == '0') {
         addr = addr_from;
-        //fprintf(stderr, "UUUUUUUUUUUUUUU\n");
     }
     else {
         str_addr[size_addr] = '\0';
         parse_address(str_addr, addr);
     }
-    //fprintf(stderr, "Addr child res: %s\n", pack_address(addr).c_str());
+    fprintf(stderr, "Receive child with address: %s\n", pack_address(addr).c_str());
 
     Ip_Port ip_port = get_ip_port(addr);
     if (!idconnections.count(ip_port)) {
@@ -332,6 +327,7 @@ void handle_child_message(struct sockaddr_in addr_from) {
 
     int id_chld = idconnections[ip_port];
     if (!children.count(id_chld)) {
+        fprintf(stderr, "Insert this new child to set\n");
         children.insert(id_chld);
     }
 }
@@ -377,8 +373,6 @@ void handle_left(struct sockaddr_in addr_from) {
     Ip_Port ip_port = get_ip_port(addr);
     if (idconnections.count(ip_port)) {
         int id = idconnections[ip_port];
-        //idconnections.erase(ip_port);
-        //connections.erase(id);
         children.erase(id);
     }
     else {
@@ -386,8 +380,11 @@ void handle_left(struct sockaddr_in addr_from) {
     }
 }
 
-void handle_message(struct sockaddr_in addr, int from_id) {
+int handle_message(struct sockaddr_in addr, int from_id) {
     // if only on children or parent
+    if (!children.count(from_id) && (flag_root || !flag_root && from_id != id_parent)) {
+        return 0;
+    }
     // ttl on new connector
 
     std::string str_addr = pack_address(addr);
@@ -402,7 +399,7 @@ void handle_message(struct sockaddr_in addr, int from_id) {
     tosend_message = std::string(message);
     if (!flag_root && from_id != id_parent) {
         fprintf(stderr, "Vajno!!! %d %d\n", from_id, id_parent);
-        fprintf(stderr, "Shildren size: %ld\n", children.size());
+        fprintf(stderr, "Сhildren size: %ld\n", children.size());
         create_new_message(MSG, id_parent);
     }
     else {
@@ -413,6 +410,7 @@ void handle_message(struct sockaddr_in addr, int from_id) {
             create_new_message(MSG, ch);
         }
     }
+    return 1;
 }
 
 int recv_message() {
@@ -421,7 +419,7 @@ int recv_message() {
     ssize_t size = recvfrom(socket_fd, buf, BUFFER_SIZE, 0, (struct sockaddr *) &addr, &addr_size);
 
     if (rand() % 99 + 1 < precent_lose) {
-        fprintf(stderr, "Bwahaha: %d\n", precent_lose);
+        fprintf(stderr, "Bwahaha you just lose new message: %d\n", precent_lose);
         return 0;
     }
 
@@ -444,6 +442,7 @@ int recv_message() {
 
     int type = (int)ntohl(((uint32_t*)buf)[0]);
     int id_message = (int)ntohl(((uint32_t*)buf)[1]);
+    fprintf(stderr, "Type message: %d\n", type);
 
     if (received_messages[current_id].count(id_message)) {
         return 0;
@@ -459,22 +458,28 @@ int recv_message() {
         return 1;
     }
 
-    send_good_message(current_id, id_message);
     if (CHILD == type) {
         handle_child_message(addr);
+        send_good_message(current_id, id_message);
     }
     else if (PARENT == type) {
         handle_parent_message(addr);
+        send_good_message(current_id, id_message);
     }
     else if (ROOT == type) {
         flag_root = true;
         fprintf(stderr, "!!! I am a root now\n");
+        send_good_message(current_id, id_message);
     }
     else if (LEFT == type) {
         handle_left(addr);
+        send_good_message(current_id, id_message);
     }
     else if (MSG == type) {
-        handle_message(addr, current_id);
+        int res = handle_message(addr, current_id);
+        if (1 == res) {
+            send_good_message(current_id, id_message);
+        }
     }
 }
 
